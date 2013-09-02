@@ -1,0 +1,48 @@
+#!/bin/bash
+
+export user="root"
+export host="xen1"
+
+if [ "$1" == "help" -o -z "$1" ]; then
+	echo "Usage: $0 {action} {vm-name} [value]"
+	echo -e "Actions: search {vm-name}\n\tconnect {vm-name}\n\tpower {vm-name} {up|down}\n\tmemory {vm-name} {value in MB}\n\tclone {vm-name} {new-vm-name}\n\tremove {name} {vm|snapshot}\n\tsnapshot {vm-name} {snapshot-name}"
+	exit
+fi
+
+ssh $user@$host -o PasswordAuthentication=no uptime &> /dev/null
+if [ $? -ne 0 ]; then
+	ret=1
+	while [ $ret -ne 0 ]; do
+		read -s -p "$user@$host's password: " pass
+		export pass
+		echo -e "\n"
+		sshpass -p $pass ssh $user@$host uptime &> /dev/null
+		ret=$?
+	done
+fi
+
+send_command(){
+	sshpass -p "$pass" ssh $user@$host "xehs $*"
+}
+
+case "$1" in
+	search) 	send_command search "$2";;
+
+	connect)	port=`sshpass -p "$pass" ssh $user@$host "xehs port $2"`
+			(sshpass -p "$pass" ssh -L$port:127.0.0.1:$port $user@$host -N) &
+			pid=$!
+			sleep 2
+			xvnc4viewer 127.0.0.1:$port
+			kill $!;;
+	
+	power)		send_command power "$2" "$3";;
+
+	memory)		send_command memory "$2" "$3";;
+
+	clone)		send_command clone "$2" "$3";;
+
+	remove)		send_command remove "$2" "$3";;
+
+	snapshot)	send_command snapshot "$2" "$3";;
+
+esac

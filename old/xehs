@@ -1,0 +1,138 @@
+#!/bin/bash
+port(){
+	uuid=`xe vm-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
+	state=`xe vm-list name-label="$1" | grep state | cut -d ':' -f2 | tr -d ' '`
+
+	if [ -z "$uuid" ]; then
+		echo "The machine \"$2\" does not exist."
+		exit
+	fi
+
+	if [ "$state" != "running" ]; then
+		echo "The machine \"$2\" isn't powered on."
+		exit
+	fi
+
+	id=`list_domains | grep $uuid | cut -d '|' -f1 | tr -d ' '`
+	xenstore-ls /local/domain/$id/console | grep vnc-port | cut -d '"' -f2
+}
+
+search(){
+	echo "---Virtual Machines---"
+	xe vm-list | grep -C1 "$1"
+	echo -e "\n---Snapshots---"
+	xe snapshot-list | grep -C1 "$1"
+}
+
+power(){
+	uuid=`xe vm-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
+	if [ -z "$uuid" ]; then
+		echo "The machine \"$1\" does not exist."
+		exit
+	fi
+
+	case "$2" in
+		up) xe vm-start uuid="$uuid";;
+		down) xe vm-shutdown force=true uuid="$uuid";;
+		*) echo "Unrecognized value.";;
+	esac
+}
+
+memory(){
+	uuid=`xe vm-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
+	state=`xe vm-list name-label="$1" | grep state | cut -d ':' -f2 | tr -d ' '`
+	
+	if [ -z "$uuid" ]; then
+		echo "The machine \"$1\" does not exist."
+		exit
+	fi
+
+	if [ "$state" != "halted" ]; then
+		echo "The machine isn't powered off."
+		exit
+	fi
+
+	mem=`expr 1024 '*' 1024 '*' "$2"`
+
+	xe vm-memory-limits-set uuid=$uuid static-min=$mem static-max=$mem dynamic-min=$mem dynamic-max=$mem
+}
+
+clone(){
+	uuid=`xe vm-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
+	state=`xe vm-list name-label="$1" | grep state | cut -d ':' -f2 | tr -d ' '`
+	
+	if [ -z "$uuid" ]; then
+		echo "The machine \"$1\" does not exist."
+		exit
+	fi
+
+	if [ "$state" != "halted" ]; then
+		echo "The machine isn't powered off."
+		exit
+	fi
+
+	xe vm-clone uuid="$uuid" new-name-label="$2"
+}
+
+remove(){
+	case "$2" in
+		vm)	uuid=`xe vm-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
+			state=`xe vm-list name-label="$1" | grep state | cut -d ':' -f2 | tr -d ' '`
+			
+			if [ -z "$uuid" ]; then
+				echo "The machine \"$1\" does not exist."
+				exit
+			fi
+
+			if [ "$state" != "halted" ]; then
+				echo "The machine isn't powered off."
+				exit
+			fi
+
+			xe vm-uninstall uuid="$uuid";;
+		snapshot)uuid=`xe snapshot-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
+			
+			if [ -z "$uuid" ]; then
+				echo "The snapshot does not exist."
+				exit
+			fi
+
+			xe snapshot-uninstall uuid="$uuid";;
+		
+		*)	echo "Value not recognized.";;
+	esac
+}
+
+snapshot(){
+	uuid=`xe vm-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
+	state=`xe vm-list name-label="$1" | grep state | cut -d ':' -f2 | tr -d ' '`
+	
+	if [ -z "$uuid" ]; then
+		echo "The machine \"$1\" does not exist."
+		exit
+	fi
+
+	if [ -z "$2" ]; then
+		echo "No name was supplied for the new snapshot."
+	fi
+
+	xe vm-snapshot uuid="$uuid" new-name-label="$2"
+}
+
+
+if [ -z $1 ]; then
+	echo "Usage: $0 {action} {name-label} [value]"
+fi
+
+case "$1" in
+	search) search "$2";;
+	port) port "$2";;
+	power) power "$2" "$3";;
+	memory) memory "$2" "$3";;
+	clone) clone "$2" "$3";;
+	remove) remove "$2" "$3";;
+	snapshot) snapshot "$2" "$3";;
+	*) echo "Comand not recognized.";;
+esac
+
+
