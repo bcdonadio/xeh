@@ -1,0 +1,263 @@
+#!/bin/bash
+
+PROGNAME="xeh"
+XE_BIN="/usr/bin/xe"
+VNC_BIN="/usr/bin/xvnc4viewer"
+SSH_BIN="/usr/bin/ssh"
+
+bold=`tput bold`
+normal=`tput sgr0`
+trap "exit 1" TERM
+export TOP_PID=$$
+
+error(){
+	echo -e "$PROGNAME: ERROR: $*" >&2
+	kill -s TERM $TOP_PID
+}
+
+warning(){
+	echo -e "$PROGNAME: WARNING: $*" >&2
+}
+
+check_xe(){
+	if [ ! -f "$XE_BIN" ]; then
+		error "$XE_BIN is not installed."
+	fi
+}
+
+check_vnc(){
+	if [ ! -f "$VNC_BIN" ]; then
+		error "$VNC_BIN is not installed."
+	fi
+}
+
+check_ssh(){
+	if [ ! -f "$SSH_BIN" ]; then
+		error "$SSH_BIN is not installed."
+	fi
+}
+
+parse_config(){
+	if [ ! -f "$CONFIG" ]; then
+		error "The config file $CONFIG does not exist."
+	fi	
+}
+
+vm_get_uuid(){
+	uuid=`$xe vm-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
+	
+	if [ -z "$uuid" ]; then
+		error "The VM \"$1\" doesn't exist on server \"$host\"."
+	fi
+
+	echo -e "$uuid"
+}
+
+vm_get_domain(){
+	domain=`$xe vm-list uuid="$1" params=dom-id | grep dom-id | cut -d ':' -f2 | tr -d ' '`
+
+	echo $domain
+}
+
+vm_get_port_vnc(){
+	port_vnc=`sshpass -p "$password" ssh "$user"@"$host" xenstore-ls /local/domain/$1/console | grep vnc-port | cut -d '"' -f2`
+
+	echo $port_vnc
+}
+
+vm_test_state(){
+	state=`$xe vm-list uuid="$2" params=power-state | grep power-state | cut -d ':' -f2 | tr -d ' '`
+	
+	if [ "$1" != "$state" ]; then
+		error "The VM isn't \"$1\"."
+	fi
+}
+
+generate_port_local(){
+	read lowerPort upperPort < /proc/sys/net/ipv4/ip_local_port_range
+	port=`shuf -i $lowerPort-$upperPort -n 1`
+	while true; do
+	        (echo >/dev/tcp/localhost/$port) &>/dev/null &&  port=`shuf -i $lowerPort-$upperPort -n 1` || break
+	done
+	echo -e "$port"
+}
+
+search(){
+	case "$1" in
+		vm)
+			out=`$xe vm-list | grep -C1 "name-label ( RW): $2"`
+			if [ "$?" -eq 0 ]; then
+				echo -e "${bold}---Virtual Machines---${normal}"
+				echo -e "$out"
+				echo -e "${bold}---\\Virtual Machines---${normal}\n"
+			fi
+			;;
+		snapshot)
+			out=`$xe snapshot-list | grep -C1 "name-label ( RW): $2"`
+			if [ "$?" -eq 0 ]; then
+				echo -e "${bold}---Snapshots---${normal}"
+				echo -e "$out"
+				echo -e "${bold}---\\Snapshots---${normal}\n"
+			fi
+			;;
+		network)
+			out=`$xe network-list | grep -C1 "name-label ( RW): $2"`
+			if [ "$?" -eq 0 ]; then
+				echo -e "${bold}---Networks---${normal}"
+				echo -e "$out"
+				echo -e "${bold}--\\Networks---${normal}\n"
+			fi
+			;;
+		cd)	
+			out=`$xe cd-list | grep -C1 "name-label ( RW): $2"`
+			if [ "$?" -eq 0 ]; then
+				echo -e "${bold}---CDs---${normal}"
+				echo -e "$out"
+				echo -e "${bold}---\\CDs---${normal}\n"
+			fi
+			;;
+		host)	
+			out=`$xe host-list | grep -C1 "name-label ( RW): $2"`
+			if [ "$?" -eq 0 ]; then
+				echo -e "${bold}---Hosts---${normal}"
+				echo -e "$out"
+				echo -e "${bold}---\\Hosts---${normal}\n"
+			fi
+			;;
+		appliance)	
+			out=`$xe appliance-list | grep -C1 "name-label ( RW): $2"`
+			if [ "$?" -eq 0 ]; then
+				echo -e "${bold}---Appliances---${normal}"
+				echo -e "$out"
+				echo -e "${bold}---\\Appliances---${normal}\n"
+			fi
+			;;
+		template)	
+			out=`$xe template-list | grep -C1 "name-label ( RW): $2"`
+			if [ "$?" -eq 0 ]; then
+				echo -e "${bold}---Templates---${normal}"
+				echo -e "$out"
+				echo -e "${bold}---\\Templates---${normal}\n"
+			fi
+			;;
+
+	esac
+}
+
+
+
+
+ARGS=`getopt -o h:u:p::c: --long host,user:,password::,ssh-port:,colour -n '$PROGNAME' -- "$@"`
+if [ $? != 0 ] ; then echo -e "Terminating..." >&2 ; exit 1 ; fi
+
+eval set -- "$ARGS"
+while true; do
+	case "$1" in
+		-h|--host) 
+			if [ -z "$host" ]; then
+				host="$2"
+			else
+				error "You can't set the host twice."
+			fi
+			shift 2
+			;;
+		-u|--user)
+			if [ -z "$user" ]; then
+				user="$2"
+			else
+				error "You can't set the user twice."
+			fi	
+			shift 2
+			;;
+		-p|--password) 	
+			case "$2" in
+				"") 
+					read -n "Password: " password
+					;;
+				*)	
+					if [ -z "$password" ]; then
+						password="$2"
+					else
+						error "You can't set the password twice."
+					fi
+					;;
+			esac
+			shift 2
+			;;
+		-r|--ssh-port)
+			if [ -z "$port_ssh" ]; then
+				port_ssh="$2"
+			else
+				error "You can't set the SSH port twice."
+			fi
+			shift 2
+			;;
+		-c|--full-colour)
+			if [ -z "$vnc_colour" ]; then
+				case "$2" in
+					0) vnc_colour="-LowColourLevel 0";;
+					1) vnc_colour="-LowColourLevel 1";;
+					2) vnc_colour="-LowColourLevel 2";;
+					3) vnc_colour="-FullColour";;
+				esac
+			else
+				error "You can't set the VNC colour mode twice."
+			fi
+			shift 2
+			;;
+		--) shift; break;;
+		*) error "Internal error.";;
+	esac
+done
+
+#Retrieve operands
+count=0
+for arg; do 
+	op[$count]=$arg	
+	count=`expr $count + 1`
+done
+
+#Set defaults
+if [ -z "$port_ssh" ]; then
+	port_ssh=22
+fi
+if [ -z "$vnc_colour" ]; then
+	vnc_colour="-LowColourLevel 0"
+fi
+
+#Give this a nickname
+xe="$XE_BIN -s $host -u $user -pw $password"
+
+case ${op[0]} in
+	vnc) 
+		check_xe
+		check_vnc
+		check_ssh
+		uuid=`vm_get_uuid ${op[1]}`
+		vm_test_state running "$uuid"
+		domain=`vm_get_domain "$uuid"`
+		port_vnc=`vm_get_port_vnc "$domain"`
+		port_local=`generate_port_local`
+
+		sshpass -p "$password" ssh "$user"@"$host" -p$port_ssh -N -L$port_local:127.0.0.1:$port_vnc &
+		tunnel_pid=$!
+		sleep 2 #wait for ssh handshake and tunnel setup
+
+		$VNC_BIN -PreferredEncoding ZRLE $vnc_colour 127.0.0.1:$port_local
+		kill $tunnel_pid
+		;;
+
+	search)
+		search vm "${op[1]}"
+		search snapshot "${op[1]}"
+		search network "${op[1]}"
+		search cd "${op[1]}"
+		search host "${op[1]}"
+		search appliance "${op[1]}"
+		search template "${op[1]}"
+		;;
+
+
+esac
+
+
