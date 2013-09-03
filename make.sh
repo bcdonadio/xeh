@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="0.1"
+VERSION="0.1.1"
 
 if [ "$1" == "build" ]; then
 	mkdir -p package/DEBIAN
@@ -12,7 +12,7 @@ Section: utils
 Priority: optional
 Architecture: all
 Essential: no
-Depends: bash, openssh-client, sshpass, xvnc4viewer, xcp-xe, coreutils, ncurses-bin, procps, grep, util-linux 
+Depends: bash, openssh-client, sshpass, xvnc4viewer, xcp-xe, coreutils, ncurses-bin, procps, grep, util-linux, stunnel
 Maintainer: Bernardo Donadio <bcdonadio@propus.com.br>
 Description: Helper for Xen's xe
  This is a helper script to ease the use of the Xen's administration tool xe.
