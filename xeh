@@ -1,12 +1,17 @@
 #!/bin/bash
 
 PROGNAME="xeh"
+CONFIG="$HOME/.xeh.conf"
 XE_BIN="/usr/bin/xe"
-VNC_BIN="/usr/bin/xvnc4viewer"
+VNC_BIN="/usr/bin/vncviewer"
 SSH_BIN="/usr/bin/ssh"
+SSHPASS_BIN="/usr/bin/sshpass"
 
+# create "macros" to switch formatting
 bold=`tput bold`
 normal=`tput sgr0`
+
+# hack so we can kill the whole script from inside a function
 trap "exit 1" TERM
 export TOP_PID=$$
 
@@ -21,33 +26,119 @@ warning(){
 
 check_xe(){
 	if [ ! -f "$XE_BIN" ]; then
-		error "$XE_BIN is not installed."
+		if [ "$1" == "warn" ]; then
+			warning "$XE_BIN is not installed."
+		else
+			error "$XE_BIN is not installed."
+		fi
 	fi
 }
 
 check_vnc(){
 	if [ ! -f "$VNC_BIN" ]; then
-		error "$VNC_BIN is not installed."
+		if [ "$1" == "warn" ]; then
+			warning "$VNC_BIN is not installed."
+		else
+			error "$VNC_BIN is not installed."
+		fi
 	fi
 }
 
 check_ssh(){
 	if [ ! -f "$SSH_BIN" ]; then
-		error "$SSH_BIN is not installed."
+		if [ "$1" == "warn" ]; then
+			warn "$SSH_BIN is not installed."
+		else
+			error "$SSH_BIN is not installed."
+		fi
 	fi
 }
 
-parse_config(){
-	if [ ! -f "$CONFIG" ]; then
-		error "The config file $CONFIG does not exist."
-	fi	
+check_sshpass(){
+	if [ ! -f "$SSHPASS_BIN" ]; then
+		if [ "$1" == "warn" ]; then
+			warn "$SSHPASS_BIN is not installed."
+		else
+			error "$SSHPASS_BIN is not installed."
+		fi
+	fi
 }
 
-vm_get_uuid(){
-	uuid=`$xe vm-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
+check_server(){
+	$xe host-list &> /dev/null
+	if [ "$?" != 0 ]; then
+		error "Unable to contact server or login into it."
+	fi
+}
+
+
+print_usage(){
+	echo -e "$PROGNAME Usage:
+$ $PROGNAME [options] {action} [object name] [additional parameters]
+
+Options:
+	-s, --server='hostname'
+		Use the specified 'hostname' string as hostname/IP address to login into.
+
+	-u, --user='username'
+		Use the specified 'username' string as username to login into xen server (both XAPI and SSH).
+
+	-p, --pasword='pass'
+		Use the specified 'pass' string as password to login into xen server (both XAPI and SSH).
+	
+	-r, --ssh-port='port'
+		Use the specified 'port' number [1-65535] to connect via SSH to xen server (default: 22).
+
+	-c, --colour='colour'
+		Use the specified 'colour' level [0-3] when connecting via VNC (default: 1).
+		Acceptable values: 0=8 colours, 1=64 colours, 2=256 colours, 3=millions of coulours
+
+Actions:
+	search [object-name] [object-type]
+		Print all objects of type 'object-type' that contains the string 'object-name'.
+		If 'object-type' is blank, every supported object type that contains the string will be printed.
+		If 'object-name' is also blank, every entry of every supported object type will be printed.
+		Acceptable values for object-type: vm snapshot network cd host appliance template
+
+	vnc {vm-name}
+		Open a VNC session connected to the specified VM 'vm-name' VGA output through a SSH tunnel.
+
+	console {vm-name}
+		Open a VT100 terminal connected to the specified VM 'vm-name' serial output.
+
+	power {vm-name} [up|down]
+		Change the VM 'vm-name' power status to either up (running) or down (halted).
+
+	memory {vm-name} [value]
+		Change the static memory value of the VM 'vm-name' to 'value' in MegaBytes.
+
+	cpu {vm-name} [value]
+		Change the static available vCPU cores to the VM 'vm-name' to the positive non-zero integer 'value'.
+
+	snapshot {vm-name} {snapshot-name}
+		Create a snapshot of the halted VM 'vm-name' and name it 'snapshot-name'.
+
+	clone {vm-name} {new-vm-name}
+		Clone a VM 'vm-name' naming it 'new-vm-name' using storage-level quick copy.
+	
+	remove {object-name} {object-type}
+		Remove (uninstall) the specified object 'object-name' of type 'object-type'.
+		You will be asked interactively for confirmation.
+		Accepted values for object-type are: vm snapshot template appliance
+
+Connection:
+	The config file is $CONFIG. If it doesn't exists, it's obligatory to inform the script the host, user and password. If it does exist, you may inform just the information that is missing from it (eg. you don't need to store the password in the config file, as the script will ask interactively). The config file is a CSV, with the following syntax:
+		host1,user1,password1,ssh_port1
+		host2,user2,password2,ssh_port2
+	If no host is informed in the arguments, it uses the first line as default. If the host is informed, it searches in the config for all information that was not provided in the arguments. If some information is missing from either the arguments or config file, the script will fail, except for the SSH port (the default 22 will be tried).
+"
+}
+
+get_uuid(){
+	uuid=`$xe $2-list name-label="$1" | grep uuid | cut -d ':' -f2 | tr -d ' '`
 	
 	if [ -z "$uuid" ]; then
-		error "The VM \"$1\" doesn't exist on server \"$host\"."
+		error "The $2 \"$1\" doesn't exist on server \"$host\"."
 	fi
 
 	echo -e "$uuid"
@@ -140,20 +231,20 @@ search(){
 				echo -e "${bold}---\\Templates---${normal}\n"
 			fi
 			;;
-
+		*)
+			error "Object type \"$1\" not recognized."
+			;;
 	esac
 }
 
-
-
-
-ARGS=`getopt -o h:u:p::c: --long host,user:,password::,ssh-port:,colour -n '$PROGNAME' -- "$@"`
+# retrieve args
+ARGS=`getopt -o s:u:p:c:h --long server:,user:,password:,ssh-port:,colour:,help -n "$PROGNAME" -- "$@"`
 if [ $? != 0 ] ; then echo -e "Terminating..." >&2 ; exit 1 ; fi
 
 eval set -- "$ARGS"
 while true; do
 	case "$1" in
-		-h|--host) 
+		-s|--server) 
 			if [ -z "$host" ]; then
 				host="$2"
 			else
@@ -169,19 +260,12 @@ while true; do
 			fi	
 			shift 2
 			;;
-		-p|--password) 	
-			case "$2" in
-				"") 
-					read -n "Password: " password
-					;;
-				*)	
-					if [ -z "$password" ]; then
-						password="$2"
-					else
-						error "You can't set the password twice."
-					fi
-					;;
-			esac
+		-p|--password)  
+			if [ -z "$password" ]; then
+				password="$2"
+			else
+				error "You can't set the password twice."
+			fi
 			shift 2
 			;;
 		-r|--ssh-port)
@@ -192,7 +276,7 @@ while true; do
 			fi
 			shift 2
 			;;
-		-c|--full-colour)
+		-c|--colour)
 			if [ -z "$vnc_colour" ]; then
 				case "$2" in
 					0) vnc_colour="-LowColourLevel 0";;
@@ -205,19 +289,82 @@ while true; do
 			fi
 			shift 2
 			;;
+		-h|--help)
+			print_usage
+			exit 0
+			;;
 		--) shift; break;;
 		*) error "Internal error.";;
 	esac
 done
 
-#Retrieve operands
+# retrieve operands
 count=0
 for arg; do 
 	op[$count]=$arg	
 	count=`expr $count + 1`
 done
 
-#Set defaults
+search_config(){
+	for linha in `cat $CONFIG`; do
+		key=`echo $linha | cut -d ',' -f1`
+		if [ "$key" == "$1" ]; then
+			info=`echo $linha | cut -d ',' -f$2`
+			break
+		fi
+	done
+
+	echo "$info"
+}
+
+#parse config
+if [ ! -f "$CONFIG" ]; then
+	warning "The config file $CONFIG does not exist."
+	if [ -z "$host" ]; then
+		error "There was no host on command-line and there is no config."
+	fi
+	if [ -z "$user" ]; then
+		error "There was no user on command-line and there is no config."
+	fi
+else	
+	cfg_head=`head -n1 "$CONFIG"`
+	if [ -z "$host" ]; then
+		host=`echo "$cfg_head" | cut -d ',' -f1`
+		if [ -z "$host" ]; then
+			error "There's no default host on config."
+		fi
+		if [ -z "$user" ]; then
+			user=`echo "$cfg_head" | cut -d ',' -f2`
+			if [ -z "$user" ]; then
+				error "There's no default user on config."
+			fi
+			if [ -z "$password" ]; then
+				password=`echo "$cfg_head" | cut -d ',' -f3`
+				if [ -z "$password" ]; then
+					error "There's no default password on config."
+				fi
+			fi
+		fi
+	else
+		if [ -z "$user"  ]; then
+			user=`search_config "$host" 2`
+		fi
+		if [ -z "$password" ]; then
+			password=`search_config "$host" 3`
+		fi
+		if [ -z "$port_ssh" ]; then
+			port_ssh=`search_config "$host" 4`
+		fi
+	fi			
+fi
+
+#if no password was provided in config nor command line, ask the user interactively
+if [ -z "$password" ]; then
+	read -p "Password for $user@$host: " password
+fi
+
+
+# set defaults
 if [ -z "$port_ssh" ]; then
 	port_ssh=22
 fi
@@ -225,39 +372,225 @@ if [ -z "$vnc_colour" ]; then
 	vnc_colour="-LowColourLevel 0"
 fi
 
-#Give this a nickname
-xe="$XE_BIN -s $host -u $user -pw $password"
+# give this snippet a nickname
+xe="eval \$XE_BIN -s \$host -u \$user -pw \$password"
 
 case ${op[0]} in
 	vnc) 
 		check_xe
 		check_vnc
 		check_ssh
-		uuid=`vm_get_uuid ${op[1]}`
+		check_sshpass
+		check_server
+		if [ -z "${op[1]}" ]; then
+			error "VM not specified."
+		fi
+		uuid=`get_uuid ${op[1]} vm`
 		vm_test_state running "$uuid"
 		domain=`vm_get_domain "$uuid"`
 		port_vnc=`vm_get_port_vnc "$domain"`
 		port_local=`generate_port_local`
 
+		# create SSH tunnel on random free port
 		sshpass -p "$password" ssh "$user"@"$host" -p$port_ssh -N -L$port_local:127.0.0.1:$port_vnc &
 		tunnel_pid=$!
 		sleep 2 #wait for ssh handshake and tunnel setup
 
+		# VNC will block the terminal, and the tunnel will be terminated as soon as the VNC is closed
 		$VNC_BIN -PreferredEncoding ZRLE $vnc_colour 127.0.0.1:$port_local
 		kill $tunnel_pid
 		;;
 
 	search)
-		search vm "${op[1]}"
-		search snapshot "${op[1]}"
-		search network "${op[1]}"
-		search cd "${op[1]}"
-		search host "${op[1]}"
-		search appliance "${op[1]}"
-		search template "${op[1]}"
+		check_xe
+		check_server
+		if [ -z "${op[1]}" ]; then
+			warning "Object name was blank; printing all entries."
+		fi
+		
+		if [ -z "${op[2]}" ]; then
+			warning "No object type specified; printing all types."
+			for object in vm snapshot network cd host appliance template; do
+				search $object "${op[1]}"
+			done
+		else
+			search "${op[2]}" "${op[1]}"
+		fi
 		;;
 
+	console)
+		check_xe
+		check_server
+		if [ -z "${op[1]}" ]; then
+			error "VM not specified"
+		fi
+		uuid=`get_uuid ${op[1]} vm`
+		vm_test_state running "$uuid"
+		domain=`vm_get_domain "$uuid"`
 
+		$xe console uuid="$uuid"
+		;;
+
+	power)
+		check_xe
+		check_server
+		if [ -z "${op[1]}" ]; then
+			error "VM not specified."
+		fi
+		uuid=`get_uuid ${op[1]} vm`
+		if [ -z "${op[2]}" ]; then
+			warning "Power action not specified"
+			value=`$xe vm-param-list uuid=$uuid | grep -e 'power-state .*:'`
+			echo -e "Actual value:\n $value"
+			exit 0
+		fi
+
+		case "${op[2]}" in
+			up) 
+				vm_test_state halted "$uuid"
+				$xe vm-start uuid="$uuid"
+				;;
+			down) 
+				vm_test_state running "$uuid"
+				$xe vm-shutdown force=true uuid="$uuid"
+				;;
+			*)
+				error "Power action \"${op[2]}\" not recognized."
+				;;
+		esac
+		;;
+	
+	memory)
+		check_xe
+		check_server
+		if [ -z "${op[1]}" ]; then
+			error "VM not specified."
+		fi
+		uuid=`get_uuid ${op[1]} vm`
+		if [ -z "${op[2]}" ]; then
+			warning "Value not specified."
+			value=`$xe vm-param-list uuid=$uuid | grep -e 'memory-\(dynamic\|static\)-\(min\|max\) .*:'`
+			echo -e "Actual values (in Bytes):\n $value"
+			exit 0
+
+		fi
+		if ! [ "${op[2]}" -eq "${op[2]}" 2> /dev/null ]; then
+			error "\"${op[2]}\" is not a valid value (you should specify in MB)."
+		fi
+		vm_test_state halted "$uuid"
+
+		mem=`expr ${op[2]} '*' 1024 '*' 1024`
+		$xe vm-memory-limits-set uuid="$uuid" static-min=$mem static-max=$mem dynamic-min=$mem dynamic-max=$mem
+		;;
+
+	cpu)
+		check_xe
+		check_server
+		if [ -z "${op[1]}" ]; then
+			error "VM not specified."
+		fi
+		uuid=`get_uuid ${op[1]} vm`
+		if [ -z "${op[2]}" ]; then
+			warning "Value not specified."
+			value=`$xe vm-param-list uuid=$uuid | grep -e 'VCPUs-\(max\|at-startup\) .*:'`
+			echo -e "Actual values: \n $value"
+			exit 0
+		fi
+		if ! [ "${op[2]}" -eq "${op[2]}" -a "${op[2]}" -gt 0 2> /dev/null ]; then
+			error "\"${op[2]}\" is not a valid value (you should specify in number of vCPUs)."
+		fi
+		vm_test_state halted "$uuid"
+		
+		actual_value=`$xe vm-param-get uuid=$uuid param-name=VCPUs-max`
+		if [ "$?" != 0 ]; then
+			error "Internal error."
+		fi
+		if [ "$actual_value" -lt "${op[2]}" ]; then
+			$xe vm-param-set uuid=$uuid VCPUs-max="${op[2]}" VCPUs-at-startup="${op[2]}"
+		else
+			$xe vm-param-set uuid=$uuid VCPUs-at-startup="${op[2]}" VCPUs-max="${op[2]}"
+		fi
+		;;
+
+	snapshot)
+		check_xe
+		check_server
+		if [ -z "${op[1]}" ]; then
+			error "VM not specified."
+		fi
+		if [ -z "${op[2]}" ]; then
+			error "New Snapshot name not specified."
+		fi
+		uuid=`get_uuid ${op[1]} vm`
+		vm_test_state halted "$uuid"
+
+		$xe vm-snapshot uuid="$uuid" new-name-label="${op[2]}"
+		;;
+
+	clone)
+		check_xe
+		check_server
+		if [ -z "${op[1]}" ]; then
+                        error "VM not specified."
+                fi
+                if [ -z "${op[2]}" ]; then
+                        error "New VM name not specified."
+                fi
+		uuid=`get_uuid ${op[1]} vm`
+		vm_test_state halted "$uuid"
+		;;
+
+	remove)
+		check_xe
+		check_server
+		if [ -z "${op[1]}" ]; then
+                        error "VM not specified."
+                fi
+                if [ -z "${op[2]}" ]; then
+                        error "Type of object not specified."
+                fi
+		
+		case "${op[2]}" in
+			vm)
+				uuid=`get_uuid "${op[1]}" vm`
+				vm_test_state halted "$uuid"
+
+				$xe vm-uninstall force=true uuid="$uuid"
+				;;
+
+			snapshot)
+				uuid=`get_uuid "${op[1]}" snapshot`
+
+				$xe snapshot-uninstall force=true uuid="$uuid"
+				;;
+
+			template)
+				uuid=`get_uuid "${op[1]}" template`
+
+				$xe template-uninstall force=true uuid="$uuid"
+				;;
+			
+			appliance)
+				uuid=`get_uuid "${op[1]}" appliance`
+
+				$xe appliance uninstall force=true uuid="$uuid"
+				;;
+
+			*) 
+				error "\"${op[2]} is not a valid object type or this script is unable to remove it."
+				;;
+		esac
+		;;
+
+	help)
+		print_usage
+		exit 0
+		;;
+
+	*)
+		error "Action not recognized."
+		;;
+	
 esac
 
-
+exit 0
