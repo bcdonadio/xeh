@@ -587,6 +587,11 @@ case ${op[0]} in
 		exit 0
 		;;
 
+	"")
+		print_usage
+		exit 0
+		;;
+
 	*)
 		error "Action not recognized."
 		;;
