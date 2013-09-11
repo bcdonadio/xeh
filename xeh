@@ -146,12 +146,18 @@ get_uuid(){
 
 vm_get_domain(){
 	domain=`$xe vm-list uuid="$1" params=dom-id | grep dom-id | cut -d ':' -f2 | tr -d ' '`
+	if [ -z "$domain" ]; then
+		error "Unable to identify the VM domain."
+	fi
 
 	echo $domain
 }
 
 vm_get_port_vnc(){
 	port_vnc=`sshpass -p "$password" ssh "$user"@"$host" xenstore-ls /local/domain/$1/console | grep vnc-port | cut -d '"' -f2`
+	if [ -z "$port_vnc" ]; then
+		error "Missing console. Either the VM isn't up yet, or this VM wasn't configured to have a VNC console."
+	fi
 
 	echo $port_vnc
 }
