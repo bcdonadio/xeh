@@ -538,6 +538,8 @@ case ${op[0]} in
                 fi
 		uuid=`get_uuid ${op[1]} vm`
 		vm_test_state halted "$uuid"
+
+		$xe vm-clone uuid="$uuid" new-name-label="${op[2]}"
 		;;
 
 	remove)
