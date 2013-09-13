@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="0.1.3"
+VERSION="0.2"
 
 if [ "$1" == "build" ]; then
 	mkdir -p package/DEBIAN
