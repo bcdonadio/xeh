@@ -92,6 +92,7 @@ Options:
 	-c, --colour='colour'
 		Use the specified 'colour' level [0-3] when connecting via VNC (default: 1).
 		Acceptable values: 0=8 colours, 1=64 colours, 2=256 colours, 3=millions of coulours
+
 	-f, --fake
 		Don't execute any xe commands that may change something. Instead, just print them.
 
